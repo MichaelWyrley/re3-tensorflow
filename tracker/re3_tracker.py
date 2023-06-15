@@ -27,19 +27,19 @@ from constants import MAX_TRACK_LENGTH
 SPEED_OUTPUT = True
 
 class Re3Tracker(object):
-    def __init__(self, gpu_id=GPU_ID):
+    def __init__(self, gpu_id=GPU_ID, pretrained=LOG_DIR, crop_size=CROP_SIZE, lstm_size=LSTM_SIZE):
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         basedir = os.path.dirname(__file__)
         tf.Graph().as_default()
-        self.imagePlaceholder = tf.placeholder(tf.uint8, shape=(None, CROP_SIZE, CROP_SIZE, 3))
-        self.prevLstmState = tuple([tf.placeholder(tf.float32, shape=(None, LSTM_SIZE)) for _ in range(4)])
+        self.imagePlaceholder = tf.placeholder(tf.uint8, shape=(None, crop_size, crop_size, 3))
+        self.prevLstmState = tuple([tf.placeholder(tf.float32, shape=(None, lstm_size)) for _ in range(4)])
         self.batch_size = tf.placeholder(tf.int32, shape=())
         self.outputs, self.state1, self.state2 = network.inference(
                 self.imagePlaceholder, num_unrolls=1, batch_size=self.batch_size, train=False,
                 prevLstmState=self.prevLstmState)
         self.sess = tf_util.Session()
         self.sess.run(tf.global_variables_initializer())
-        ckpt = tf.train.get_checkpoint_state(os.path.join(basedir, '..', LOG_DIR, 'checkpoints'))
+        ckpt = tf.train.get_checkpoint_state(pretrained)
         if ckpt is None:
             raise IOError(
                     ('Checkpoint model could not be found. '
@@ -56,15 +56,7 @@ class Re3Tracker(object):
     # unique_id{str}: A unique id for the object being tracked.
     # image{str or numpy array}: The current image or the path to the current image.
     # starting_box{None or 4x1 numpy array or list}: 4x1 bounding box in X1, Y1, X2, Y2 format.
-    def track(self, unique_id, image, starting_box=None):
-        start_time = time.time()
-
-        if type(image) == str:
-            image = cv2.imread(image)[:,:,::-1]
-        else:
-            image = image.copy()
-
-        image_read_time = time.time() - start_time
+    def track(self, unique_id, image, starting_box=None, max_track_length=MAX_TRACK_LENGTH):
 
         if starting_box is not None:
             lstmState = [np.zeros((1, LSTM_SIZE)) for _ in range(4)]
@@ -95,7 +87,7 @@ class Re3Tracker(object):
         # Shift output box to full image coordinate system.
         outputBox = bb_util.from_crop_coordinate_system(rawOutput.squeeze() / 10.0, pastBBoxPadded, 1, 1)
 
-        if forwardCount > 0 and forwardCount % MAX_TRACK_LENGTH == 0:
+        if forwardCount > 0 and forwardCount % max_track_length == 0:
             croppedInput, _ = im_util.get_cropped_input(image, outputBox, CROP_PAD, CROP_SIZE)
             input = np.tile(croppedInput[np.newaxis,...], (2,1,1,1))
             feed_dict = {
@@ -114,13 +106,7 @@ class Re3Tracker(object):
             outputBox = np.array(starting_box)
 
         self.tracked_data[unique_id] = (lstmState, outputBox, image, originalFeatures, forwardCount)
-        end_time = time.time()
-        if self.total_forward_count > 0:
-            self.time += (end_time - start_time - image_read_time)
-        if SPEED_OUTPUT and self.total_forward_count % 100 == 0:
-            print('Current tracking speed:   %.3f FPS' % (1 / (end_time - start_time - image_read_time)))
-            print('Current image read speed: %.3f FPS' % (1 / (image_read_time)))
-            print('Mean tracking speed:      %.3f FPS\n' % (self.total_forward_count / max(.00001, self.time)))
+        
         return outputBox
 
 
